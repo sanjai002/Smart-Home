@@ -14,7 +14,7 @@ detect.py is a Python script for performing human detection using the YOLOv3 (Yo
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/your_username/detect.py.git
+   git clone https://github.com/sanjai002/detect.py.git
 2. Install the required dependencies:
    
     ```bash
