@@ -1,3 +1,4 @@
+from dataclasses import field
 import sys
 import cv2
 import numpy as np
@@ -6,9 +7,21 @@ import serial.tools.list_ports
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
-from websocket import create_connection
+import json
+import requests
+from websocket import WebSocket
+import threading
+import time
+import telegram
 
-url = 'ws://192.168.4.1'
+bot = telegram.Bot(token='7162908022:AAGjz5T2hS_mvIZl3kUqocVlg3edg3rdr24')
+
+
+
+api_url = "https://api.thingspeak.com/update?api_key=CROD93GHWL1RFN38"
+
+global field7
+
 
 class StreamThread(QThread):
     frame_ready = pyqtSignal(np.ndarray)
@@ -25,13 +38,16 @@ class StreamThread(QThread):
                 frame_t = cv2.imdecode(imgnp, -1)
                 frame = cv2.resize(frame_t, (640, 480))  # Adjust the size as needed
                 self.frame_ready.emit(frame)
+        
         except Exception as e:
             print("WebSocket error:", e)
+
+    
 
 class ESPInterface(QWidget):
     def __init__(self):
         super(ESPInterface, self).__init__()
-
+        self.count=0
         self.serial_ports = QComboBox()
         self.refresh_ports()
 
@@ -39,7 +55,7 @@ class ESPInterface(QWidget):
         self.connect_button.clicked.connect(self.connect_serial)
 
         self.serial_status_label = QLabel("Serial Status: Not Connected")
-
+        self.flag=False
         self.ip_label = QLabel("IP Address of ESP32CAM: ")
         self.ip_address_entry = QLineEdit()
         self.ip_address_entry.setPlaceholderText("Enter ESP32CAM IP Address")
@@ -75,6 +91,7 @@ class ESPInterface(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_frame)
 
+
         labelsPath = "obj.names"
         self.LABELS = open(labelsPath).read().strip().split("\n")
 
@@ -98,6 +115,7 @@ class ESPInterface(QWidget):
         self.avg_boxes = []
         self.avg_confidences = []
         self.no_person_counter = 0  # Counter for consecutive frames without a person
+
 
     def refresh_ports(self):
         self.serial_ports.clear()
@@ -135,7 +153,8 @@ class ESPInterface(QWidget):
     def start_streaming(self):
         if self.serial is not None and self.serial.isOpen():
             try:
-                self.ws = create_connection(url)
+                self.ws = WebSocket()
+                self.ws.connect("ws://esp32.local")
                 print("Connected to WebSocket server")
                 self.timer.start(30)
                 self.start_stream_button.setEnabled(False)
@@ -167,7 +186,6 @@ class ESPInterface(QWidget):
                 self.stream_thread.quit()
                 self.stream_thread.wait()
 
-
     def update_frame(self):
         try:
             if self.frame is not None:
@@ -184,6 +202,7 @@ class ESPInterface(QWidget):
                 # Check if the counter has reached 5 (indicating 5 consecutive frames without a person)
                 if self.no_person_counter >= 5:
                     # Send signal 4 to the serial port
+                    self.flag=False
                     self.send_signal_to_serial(4)
                     print("No person detected for 5 consecutive frames. Sending signal 4 to serial port.")
 
@@ -209,8 +228,19 @@ class ESPInterface(QWidget):
                     print(avg_confidence)
                     # Send appropriate signal to serial port
                     if person_detected:
-                        self.send_signal_to_serial(1)
-                        print(f"Person Detected! Confidence: {avg_confidence}")
+                        if field7==True and self.flag==False :
+                            self.send_signal_to_serial(4)
+                            image_path = f'img{self.count}.jpg'
+                            cv2.imwrite(image_path, self.frame) 
+                            try:
+                                with open(image_path, 'rb') as image_file:
+                                    bot.sendPhoto(chat_id='688027432', photo=image_file)
+                                    self.flag=True
+                            except Exception as e:
+                                    print("Error sending photo via Telegram:", e)
+
+                        else:
+                            self.send_signal_to_serial(1)
 
                     # Reset the averages
                     self.avg_boxes = []
@@ -221,10 +251,10 @@ class ESPInterface(QWidget):
 
                 # Display the frame
                 self.display_frame(self.frame)
+
         except Exception as e:
             print("Update frame error:", e)
-
-
+    
     def send_signal_to_serial(self, signal):
         try:
             if self.serial is not None and self.serial.isOpen():
@@ -232,7 +262,6 @@ class ESPInterface(QWidget):
                 print(f"Sent signal to serial port: {signal}")
         except Exception as e:
             print("Error sending signal to serial port:", e)
-
 
     def set_frame(self, frame):
         self.frame = frame
@@ -302,12 +331,66 @@ class ESPInterface(QWidget):
         error_dialog.setText(message)
         error_dialog.exec_()
 
-    def closeEvent(self, event):
-        if self.timer.isActive():
-            self.timer.stop()
+
+
+    def read_serial():
+        global field7
+        field7=False
+        try:
+            field1 = field2 = field3 = field4 = field5 = field6 = "0"
+            global api_url
+            while True:
+                if main_window.serial is not None and main_window.serial.isOpen():
+                    while main_window.serial.in_waiting:
+                        try:
+                            data = main_window.serial.readline().decode('utf-8').strip()
+                            print("Received data:", data)
+                            json_data = json.loads(data)
+                            field1 = str(json_data.get('Energy1', field1))
+                            field2 = str(json_data.get('Energy2', field2))
+                            field3 = str(json_data.get('Energy3', field3))
+                            field4 = str(json_data.get('EnergyFan', field4))
+                            field5 = str(json_data.get('humidity', field5))
+                            field6 = str(json_data.get("temperature", field6))
+                            field7 = json_data.get('security',field7)
+                            print(field1,field2,field3,field4,field5,field6,field7)
+                            api_url = api_url+"&field1="+field1+"&field2="+field2+"&field3="+field3+"&field4="+field4+"&field5="+field5+"&field6="+field6
+                        except json.JSONDecodeError as e:
+                            print("Error decoding JSON:", e)
+                            pass
+        except:
+            pass
+        
+
+
+class TaskScheduler:
+    def __init__(self):
+        self.last_execution_time = time.time()
+        self.timer = threading.Timer(20, self.data_upload)
+        self.timer.start()
+
+    def data_upload(self):
+        current_time = time.time()
+        if current_time - self.last_execution_time >= 10:
+            try:
+                response = requests.get(api_url)
+                if response.status_code == 200:
+                    print("Data sent to ThingSpeak successfully.")
+                else:
+                    print(f"Failed to send data to ThingSpeak. Status code: {response.status_code}")
+            except Exception as e:
+                print("Error sending data to ThingSpeak:", e)
+            self.last_execution_time = current_time
+
+        # Restart the timer
+        self.timer = threading.Timer(20, self.data_upload)
+        self.timer.start()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     main_window = ESPInterface()
     main_window.show()
+    thread = threading.Thread(target=ESPInterface.read_serial)
+    thread.start()
+    scheduler = TaskScheduler()
     sys.exit(app.exec_())
